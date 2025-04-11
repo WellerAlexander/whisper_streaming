@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Live Transcription</title>
+</head>
+
+<body>
+    <h1>Live Transcription</h1>
+
+    <input type="file" id="audioInput" accept="audio/*" />
+    <button id="start">Start Transcription</button>
+    <div id="ending">
+
+    </div>
+    <div id="processed">
+
+    </div>
+    <h3>Transcript:</h3>
+    <div style="width: 100%;" id="transcriptBox">
+
+    </div>
+
+    <script>
+        const endingDiv = document.getElementById("ending");
+        const processedDiv = document.getElementById("processed");
+        const audioInput = document.getElementById('audioInput');
+        const startBtn = document.getElementById('start');
+        const transcriptBox = document.getElementById('transcriptBox');
+
+        const SAMPLE_RATE = 16000; // Match backend expectations
+        const CHUNK_DURATION = 0.1; // seconds
+        const CHUNK_INTERVAL = CHUNK_DURATION * 0; // ms
+
+        let ws;
+
+        document.getElementById("start").onclick = async () => {
+            const file = document.getElementById("audioInput").files[0];
+            if (!file) return alert("Select a file first!");
+
+            ws = new WebSocket("ws://localhost:8765");
+            ws.binaryType = "arraybuffer";
+
+            ws.onclose = (e) => {
+                console.warn("WebSocket closed", e);
+            };
+
+            ws.onerror = (e) => {
+                console.error("WebSocket error", e);
+            };
+
+            ws.onopen = async () => {
+                console.log("WebSocket connected, decoding audio...");
+
+                const arrayBuffer = await file.arrayBuffer();
+                const audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                const channelData = audioBuffer.getChannelData(0); // mono
+
+                const chunkSize = Math.floor(SAMPLE_RATE * CHUNK_DURATION); // samples
+                let offset = 0;
+
+                const sendChunk = () => {
+                    if (offset >= channelData.length) {
+                        console.log("Done streaming audio");
+                        return;
+                    }
+
+                    const slice = channelData.slice(offset, offset + chunkSize);
+                    const int16 = floatTo16BitPCM(slice);
+                    ws.send(int16.buffer);
+                    console.log("Sent audio.");
+
+                    offset += chunkSize;
+                    setTimeout(sendChunk, CHUNK_INTERVAL);
+                };
+
+                sendChunk();
+            };
+
+            ws.onmessage = async (event) => {
+                console.log(event.data);
+                if (event.data.includes("Data:")) {
+                    const msg = event.data.replace("Data: ", ""); // e.g. "320 5720 Hello world"
+                    const [begStr, endStr, ...words] = msg.split(" ");
+                    console
+                    const beg = parseFloat(begStr);
+                    const end = parseFloat(endStr);
+                    endingDiv.innerText = end;
+                    const text = words.join(" ");  // rejoin the rest into a full string
+                    console.log(text);
+                    transcriptBox.innerText = transcriptBox.innerText + text;
+
+                } else if (event.data.includes("Processed:")) {
+                    const msg = event.data.replace("Data: ", ""); // e.g. "320 5720 Hello world"
+                    processedDiv.innerText = msg;
+                }
+            }
+        };
+
+        // Convert Float32Array [-1,1] to Int16 PCM
+        function floatTo16BitPCM(float32Array) {
+            const output = new Int16Array(float32Array.length);
+            for (let i = 0; i < float32Array.length; i++) {
+                let s = float32Array[i];
+                s = Math.max(-1, Math.min(1, s));
+                output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            return output;
+        }
+    </script>
+</body>
+
+</html>

@@ -7,12 +7,17 @@ import os
 import logging
 import numpy as np
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'  # or '%Y-%m-%d %H:%M:%S' for full date
+)
 logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser()
 
 # server options
 parser.add_argument("--host", type=str, default='localhost')
-parser.add_argument("--port", type=int, default=43007)
+parser.add_argument("--port", type=int, default=8765)
 parser.add_argument("--warmup-file", type=str, dest="warmup_file", 
         help="The path to a speech audio wav file to warm up Whisper so that the very first chunk processing is fast. It can be e.g. https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav .")
 
@@ -30,6 +35,7 @@ size = args.model
 language = args.lan
 asr, online = asr_factory(args)
 min_chunk = args.min_chunk_size
+min_chunk = 1 #TODO FOR TESTING
 
 # warm up the ASR because the very first transcribe takes more time than the others. 
 # Test results in https://github.com/ufal/whisper_streaming/pull/81
@@ -50,6 +56,9 @@ else:
 
 import line_packet
 import socket
+import websockets
+from websockets.asyncio.server import serve
+import asyncio
 
 class Connection:
     '''it wraps conn object'''
@@ -106,7 +115,7 @@ class ServerProcessor:
             raw_bytes = self.connection.non_blocking_receive_audio()
             if not raw_bytes:
                 break
-#            print("received audio:",len(raw_bytes), "bytes", raw_bytes[:10])
+            print("received audio:",len(raw_bytes), "bytes", raw_bytes[:10])
             sf = soundfile.SoundFile(io.BytesIO(raw_bytes), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
             audio, _ = librosa.load(sf,sr=SAMPLING_RATE,dtype=np.float32)
             out.append(audio)
@@ -169,16 +178,39 @@ class ServerProcessor:
 
 # server loop
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.bind((args.host, args.port))
-    s.listen(1)
-    logger.info('Listening on'+str((args.host, args.port)))
-    while True:
-        conn, addr = s.accept()
-        logger.info('Connected to client on {}'.format(addr))
-        connection = Connection(conn)
-        proc = ServerProcessor(connection, online, args.min_chunk_size)
-        proc.process()
-        conn.close()
-        logger.info('Connection to client closed')
-logger.info('Connection closed, terminating.')
+
+async def echo(websocket):
+    out = []
+    processed = 0
+    minlimit = min_chunk*SAMPLING_RATE
+    online.init()  # init once per connection
+    async for message in websocket:
+        #receive_audio_chunk
+        if sum(len(x) for x in out) < minlimit:
+            sf = soundfile.SoundFile(io.BytesIO(message), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
+            audio, _ = librosa.load(sf,sr=SAMPLING_RATE,dtype=np.float32)
+            processed += (len(audio)/SAMPLING_RATE)
+            print(processed)
+            out.append(audio)
+            await websocket.send("Processed:"+str(processed))
+            continue
+        else:
+            await websocket.send("Enough data")
+            online.insert_audio_chunk(np.concatenate(out))
+            o = online.process_iter()
+            #send_results
+            print(o)
+            if o != None and o[0] != None and o[1] != None:
+                beg, end = o[0]*1000,o[1]*1000
+                print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr)
+                await websocket.send("Data: %1.0f %1.0f %s" % (beg,end,o[2]))
+            else:
+                await websocket.send("No Text")
+            out = []
+
+async def main():
+    async with serve(echo, host=args.host, port=args.port,ping_interval=60,ping_timeout=30,max_size=None) as server:
+        logger.info('Listening on'+str((args.host, args.port)))
+        await server.serve_forever()
+
+asyncio.run(main())
