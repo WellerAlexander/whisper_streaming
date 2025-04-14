@@ -38,9 +38,13 @@
         document.getElementById("start").onclick = async () => {
             const file = document.getElementById("audioInput").files[0];
             if (!file) return alert("Select a file first!");
-
             ws = new WebSocket("ws://localhost:8765");
             ws.binaryType = "arraybuffer";
+            setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send("ping");
+                }
+            }, 5000); // every 5 seconds
 
             ws.onclose = (e) => {
                 console.warn("WebSocket closed", e);

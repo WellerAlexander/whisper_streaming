@@ -523,7 +523,7 @@ class OnlineASRProcessor:
             #self.chunk_at(t)
 
         logger.debug(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}")
-        return self.to_flush(o)
+        return (self.to_flush(o),self.to_flush(self.transcript_buffer.complete()))
 
     def chunk_completed_sentence(self):
         if self.commited == []: return
@@ -784,6 +784,7 @@ def asr_factory(args, logfile=sys.stderr):
     Creates and configures an ASR and ASR Online instance based on the specified backend and arguments.
     """
     backend = args.backend
+    logger.info(f"Backend:{backend}")
     if backend == "openai-api":
         logger.debug("Using OpenAI API.")
         asr = OpenaiApiASR(lan=args.lan)

@@ -128,3 +128,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 *.mp3
+/node_modules
+/website/node_modules

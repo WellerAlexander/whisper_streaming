@@ -35,7 +35,7 @@ size = args.model
 language = args.lan
 asr, online = asr_factory(args)
 min_chunk = args.min_chunk_size
-min_chunk = 1 #TODO FOR TESTING
+min_chunk = 5 #TODO FOR TESTING
 
 # warm up the ASR because the very first transcribe takes more time than the others. 
 # Test results in https://github.com/ufal/whisper_streaming/pull/81
@@ -186,31 +186,38 @@ async def echo(websocket):
     online.init()  # init once per connection
     async for message in websocket:
         #receive_audio_chunk
-        if sum(len(x) for x in out) < minlimit:
-            sf = soundfile.SoundFile(io.BytesIO(message), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
-            audio, _ = librosa.load(sf,sr=SAMPLING_RATE,dtype=np.float32)
-            processed += (len(audio)/SAMPLING_RATE)
-            print(processed)
-            out.append(audio)
-            await websocket.send("Processed:"+str(processed))
-            continue
-        else:
-            await websocket.send("Enough data")
-            online.insert_audio_chunk(np.concatenate(out))
-            o = online.process_iter()
-            #send_results
-            print(o)
-            if o != None and o[0] != None and o[1] != None:
-                beg, end = o[0]*1000,o[1]*1000
-                print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr)
-                await websocket.send("Data: %1.0f %1.0f %s" % (beg,end,o[2]))
+        if(message != "ping"):
+            if sum(len(x) for x in out) < minlimit:
+                sf = soundfile.SoundFile(io.BytesIO(message), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
+                audio, _ = librosa.load(sf,sr=SAMPLING_RATE,dtype=np.float32)
+                processed += (len(audio)/SAMPLING_RATE)
+                print(processed)
+                out.append(audio)
+                await websocket.send("Processed:"+str(processed))
+                continue
             else:
-                await websocket.send("No Text")
-            out = []
+                await websocket.send("Enough data")
+                online.insert_audio_chunk(np.concatenate(out))
+                o,u = online.process_iter()
+                #send_results
+                print(f"o:{o}")
+                print(f"u:{u}")
+                if o != None and o[0] != None and o[1] != None:
+                    beg, end = o[0]*1000,o[1]*1000
+                    await websocket.send("Data: %1.0f %1.0f %s" % (beg,end,o[2]))
+                    if u != None and u[0] != None and u[1] != None:
+                        begu, endu = u[0]*1000,u[1]*1000
+                        await websocket.send("Unconfirmed: %1.0f %1.0f %s" % (begu,endu,u[2]))
+                else:
+                    await websocket.send("No Text")
+                out = []
+        
+        
 
 async def main():
-    async with serve(echo, host=args.host, port=args.port,ping_interval=60,ping_timeout=30,max_size=None) as server:
+    async with serve(echo, host=args.host, port=args.port,ping_interval=None,max_size=None) as server:
         logger.info('Listening on'+str((args.host, args.port)))
         await server.serve_forever()
 
 asyncio.run(main())
+print("test")
